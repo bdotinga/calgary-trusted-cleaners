@@ -64,6 +64,7 @@ export default function GCPipeline() {
   const [editing, setEditing]     = useState(null)
   const [form, setForm]           = useState(EMPTY)
   const [saving, setSaving]       = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [search, setSearch]       = useState('')
   const [searchParams]            = useSearchParams()
 
@@ -100,19 +101,29 @@ export default function GCPipeline() {
     setModalOpen(true)
   }
 
-  function closeModal() { setModalOpen(false); setEditing(null) }
+  function closeModal() { setModalOpen(false); setEditing(null); setSaveError('') }
 
   function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
   async function handleSave() {
     if (!form.company.trim()) return
     setSaving(true)
+    setSaveError('')
+
+    let error
     if (editing) {
-      await supabase.from('gc_pipeline').update(form).eq('id', editing.id)
+      ;({ error } = await supabase.from('gc_pipeline').update(form).eq('id', editing.id))
     } else {
       const tier_rows = rows.filter(r => r.tier === form.tier)
-      await supabase.from('gc_pipeline').insert({ ...form, sort_order: tier_rows.length + 1 })
+      ;({ error } = await supabase.from('gc_pipeline').insert({ ...form, sort_order: tier_rows.length + 1 }))
     }
+
+    if (error) {
+      setSaveError(error.message)
+      setSaving(false)
+      return
+    }
+
     await fetchRows()
     setSaving(false)
     closeModal()
@@ -249,7 +260,12 @@ export default function GCPipeline() {
             </FormField>
           </div>
         </div>
-        <div className="flex justify-end gap-3 mt-6">
+        {saveError && (
+          <div className="mt-4 bg-danger/10 border border-danger/20 text-danger text-sm px-4 py-2.5 rounded-lg">
+            {saveError}
+          </div>
+        )}
+        <div className="flex justify-end gap-3 mt-4">
           <button onClick={closeModal} className="btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-60">
             {saving ? 'Saving…' : editing ? 'Save Changes' : 'Add GC'}
