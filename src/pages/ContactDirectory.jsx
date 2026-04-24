@@ -202,6 +202,7 @@ export default function ContactDirectory() {
           <div className="sm:col-span-2">
             <FormField label="Notes">
               <Textarea value={form.notes || ''} onChange={e => setField('notes', e.target.value)} placeholder="Notes about this contact..."/>
+            </FormField>
           </div>
         </div>
         {saveError && (
