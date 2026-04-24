@@ -14,6 +14,10 @@ const EMPTY = {
   outcome: 'Neutral', what_discussed: '', next_action: '', next_action_date: ''
 }
 
+function clean(obj) {
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === '' ? null : v]))
+}
+
 export default function CommunicationLog() {
   const { isAdmin } = useAuth()
   const [rows, setRows]           = useState([])
@@ -22,6 +26,7 @@ export default function CommunicationLog() {
   const [editing, setEditing]     = useState(null)
   const [form, setForm]           = useState(EMPTY)
   const [saving, setSaving]       = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [search, setSearch]       = useState('')
 
   const fetchRows = useCallback(async () => {
@@ -43,23 +48,31 @@ export default function CommunicationLog() {
   function openAdd() {
     setEditing(null)
     const today = new Date().toISOString().split('T')[0]
-    const now = new Date().toTimeString().slice(0,5)
+    const now   = new Date().toTimeString().slice(0, 5)
     setForm({ ...EMPTY, date: today, time: now })
+    setSaveError('')
     setModalOpen(true)
   }
 
-  function openEdit(row) { setEditing(row); setForm({ ...row }); setModalOpen(true) }
-  function closeModal() { setModalOpen(false); setEditing(null) }
+  function openEdit(row) { setEditing(row); setForm({ ...row }); setSaveError(''); setModalOpen(true) }
+  function closeModal()  { setModalOpen(false); setEditing(null); setSaveError('') }
   function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
   async function handleSave() {
-    if (!form.contact_name.trim()) return
+    if (!form.contact_name.trim()) { setSaveError('Contact name is required.'); return }
+    if (!form.date)                { setSaveError('Date is required.'); return }
     setSaving(true)
+    setSaveError('')
+
+    let error
     if (editing) {
-      await supabase.from('communication_log').update(form).eq('id', editing.id)
+      const { id, created_at, updated_at, ...rest } = form
+      ;({ error } = await supabase.from('communication_log').update(clean(rest)).eq('id', editing.id))
     } else {
-      await supabase.from('communication_log').insert(form)
+      ;({ error } = await supabase.from('communication_log').insert(clean(form)))
     }
+
+    if (error) { setSaveError(error.message); setSaving(false); return }
     await fetchRows(); setSaving(false); closeModal()
   }
 
@@ -72,7 +85,7 @@ export default function CommunicationLog() {
   function exportCSV() {
     const headers = ['Date','Time','Contact','Company','Type','Outcome','Discussed','Next Action','Next Action Date']
     const body = filtered.map(r => [r.date,r.time,r.contact_name,r.company,r.type,r.outcome,r.what_discussed,r.next_action,r.next_action_date]
-      .map(v => `"${(v||'').toString().replace(/"/g,'""')}"`) .join(','))
+      .map(v => '"' + (v||'').toString().replace(/"/g,'""') + '"').join(','))
     const csv = [headers.join(','), ...body].join('\n')
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}))
     a.download = 'comm_log.csv'; a.click()
@@ -91,7 +104,7 @@ export default function CommunicationLog() {
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
               className="input-base pl-8 py-1.5 w-52 text-xs"/>
           </div>
           <button onClick={exportCSV} className="btn-ghost text-xs py-1.5"><Download size={13}/>CSV</button>
@@ -107,7 +120,7 @@ export default function CommunicationLog() {
             <table className="w-full">
               <thead className="border-b border-white/8">
                 <tr>
-                  {['Date','Time','Contact','Company','Type','Outcome','Discussed','Next Action','Next Action Date',...(isAdmin?['']:[])]
+                  {['Date','Time','Contact','Company','Type','Outcome','Discussed','Next Action','Next Action Date']
                     .map(h => <th key={h} className="table-th">{h}</th>)}
                   {isAdmin && <th className="table-th w-16"></th>}
                 </tr>
@@ -144,10 +157,18 @@ export default function CommunicationLog() {
 
       <Modal title={editing ? 'Edit Log Entry' : 'Add Communication'} open={modalOpen} onClose={closeModal} wide>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <FormField label="Date" required><Input type="date" value={form.date} onChange={e => setField('date', e.target.value)}/></FormField>
-          <FormField label="Time"><Input type="time" value={form.time} onChange={e => setField('time', e.target.value)}/></FormField>
-          <FormField label="Contact Name" required><Input value={form.contact_name} onChange={e => setField('contact_name', e.target.value)} placeholder="Full name"/></FormField>
-          <FormField label="Company"><Input value={form.company} onChange={e => setField('company', e.target.value)} placeholder="Company"/></FormField>
+          <FormField label="Date" required>
+            <Input type="date" value={form.date || ''} onChange={e => setField('date', e.target.value)}/>
+          </FormField>
+          <FormField label="Time">
+            <Input type="time" value={form.time || ''} onChange={e => setField('time', e.target.value)}/>
+          </FormField>
+          <FormField label="Contact Name" required>
+            <Input value={form.contact_name || ''} onChange={e => setField('contact_name', e.target.value)} placeholder="Full name"/>
+          </FormField>
+          <FormField label="Company">
+            <Input value={form.company || ''} onChange={e => setField('company', e.target.value)} placeholder="Company"/>
+          </FormField>
           <FormField label="Type">
             <Select value={form.type} onChange={e => setField('type', e.target.value)}>
               {TYPE_OPTS.map(o => <option key={o}>{o}</option>)}
@@ -159,15 +180,26 @@ export default function CommunicationLog() {
             </Select>
           </FormField>
           <div className="sm:col-span-2">
-            <FormField label="What Was Discussed"><Textarea value={form.what_discussed} onChange={e => setField('what_discussed', e.target.value)} placeholder="Summary of conversation…"/></FormField>
+            <FormField label="What Was Discussed">
+              <Textarea value={form.what_discussed || ''} onChange={e => setField('what_discussed', e.target.value)} placeholder="Summary of conversation..."/>
+            </FormField>
           </div>
-          <FormField label="Next Action"><Input value={form.next_action} onChange={e => setField('next_action', e.target.value)} placeholder="Follow-up action"/></FormField>
-          <FormField label="Next Action Date"><Input type="date" value={form.next_action_date} onChange={e => setField('next_action_date', e.target.value)}/></FormField>
+          <FormField label="Next Action">
+            <Input value={form.next_action || ''} onChange={e => setField('next_action', e.target.value)} placeholder="Follow-up action"/>
+          </FormField>
+          <FormField label="Next Action Date">
+            <Input type="date" value={form.next_action_date || ''} onChange={e => setField('next_action_date', e.target.value)}/>
+          </FormField>
         </div>
-        <div className="flex justify-end gap-3 mt-6">
+        {saveError && (
+          <div className="mt-4 bg-danger/10 border border-danger/20 text-danger text-sm px-4 py-2.5 rounded-lg">
+            {saveError}
+          </div>
+        )}
+        <div className="flex justify-end gap-3 mt-4">
           <button onClick={closeModal} className="btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-60">
-            {saving ? 'Saving…' : editing ? 'Save Changes' : 'Add Entry'}
+            {saving ? 'Saving...' : editing ? 'Save Changes' : 'Add Entry'}
           </button>
         </div>
       </Modal>
