@@ -14,8 +14,13 @@ const EMPTY = {
   outcome: 'Neutral', what_discussed: '', next_action: '', next_action_date: ''
 }
 
+// Convert empty strings to null for date/time columns
 function clean(obj) {
-  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === '' ? null : v]))
+  const result = {}
+  for (const [k, v] of Object.entries(obj)) {
+    result[k] = (typeof v === 'string' && v.trim() === '') ? null : v
+  }
+  return result
 }
 
 export default function CommunicationLog() {
@@ -30,8 +35,12 @@ export default function CommunicationLog() {
   const [search, setSearch]       = useState('')
 
   const fetchRows = useCallback(async () => {
-    const { data } = await supabase.from('communication_log').select('*')
-      .order('date', { ascending: false }).order('time', { ascending: false })
+    const { data, error } = await supabase
+      .from('communication_log')
+      .select('*')
+      .order('date', { ascending: false })
+      .order('time', { ascending: false })
+    if (error) console.error('fetchRows error:', error)
     setRows(data || [])
     setLoading(false)
   }, [])
@@ -54,45 +63,89 @@ export default function CommunicationLog() {
     setModalOpen(true)
   }
 
-  function openEdit(row) { setEditing(row); setForm({ ...row }); setSaveError(''); setModalOpen(true) }
-  function closeModal()  { setModalOpen(false); setEditing(null); setSaveError('') }
+  function openEdit(row) {
+    setEditing(row)
+    setForm({ ...row })
+    setSaveError('')
+    setModalOpen(true)
+  }
+
+  function closeModal() { setModalOpen(false); setEditing(null); setSaveError('') }
   function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
   async function handleSave() {
-    if (!form.contact_name.trim()) { setSaveError('Contact name is required.'); return }
-    if (!form.date)                { setSaveError('Date is required.'); return }
-    setSaving(true)
     setSaveError('')
 
-    let error
-    if (editing) {
-      const { id, created_at, updated_at, ...rest } = form
-      ;({ error } = await supabase.from('communication_log').update(clean(rest)).eq('id', editing.id))
-    } else {
-      ;({ error } = await supabase.from('communication_log').insert(clean(form)))
+    // Validate required fields
+    if (!form.contact_name || !form.contact_name.trim()) {
+      setSaveError('Contact Name is required.')
+      return
+    }
+    if (!form.date) {
+      setSaveError('Date is required.')
+      return
     }
 
-    if (error) { setSaveError(error.message); setSaving(false); return }
-    await fetchRows(); setSaving(false); closeModal()
+    setSaving(true)
+
+    try {
+      let result
+      if (editing) {
+        const { id, created_at, updated_at, ...rest } = form
+        result = await supabase
+          .from('communication_log')
+          .update(clean(rest))
+          .eq('id', editing.id)
+      } else {
+        result = await supabase
+          .from('communication_log')
+          .insert(clean(form))
+      }
+
+      console.log('Supabase result:', result)
+
+      if (result.error) {
+        console.error('Save error:', result.error)
+        setSaveError(result.error.message || 'Failed to save. Check browser console for details.')
+        setSaving(false)
+        return
+      }
+
+      await fetchRows()
+      setSaving(false)
+      closeModal()
+    } catch (err) {
+      console.error('Unexpected error:', err)
+      setSaveError('Unexpected error: ' + err.message)
+      setSaving(false)
+    }
   }
 
   async function handleDelete(id) {
     if (!confirm('Delete this log entry?')) return
-    await supabase.from('communication_log').delete().eq('id', id)
-    fetchRows()
+    const { error } = await supabase.from('communication_log').delete().eq('id', id)
+    if (error) alert('Delete failed: ' + error.message)
+    else fetchRows()
   }
 
   function exportCSV() {
     const headers = ['Date','Time','Contact','Company','Type','Outcome','Discussed','Next Action','Next Action Date']
-    const body = filtered.map(r => [r.date,r.time,r.contact_name,r.company,r.type,r.outcome,r.what_discussed,r.next_action,r.next_action_date]
-      .map(v => '"' + (v||'').toString().replace(/"/g,'""') + '"').join(','))
+    const body = filtered.map(r =>
+      [r.date,r.time,r.contact_name,r.company,r.type,r.outcome,r.what_discussed,r.next_action,r.next_action_date]
+        .map(v => '"' + (v||'').toString().replace(/"/g,'""') + '"').join(',')
+    )
     const csv = [headers.join(','), ...body].join('\n')
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}))
-    a.download = 'comm_log.csv'; a.click()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}))
+    a.download = 'comm_log.csv'
+    a.click()
   }
 
   const q = search.toLowerCase()
-  const filtered = rows.filter(r => !q || [r.contact_name, r.company, r.type, r.outcome, r.what_discussed].some(v => (v||'').toLowerCase().includes(q)))
+  const filtered = rows.filter(r =>
+    !q || [r.contact_name, r.company, r.type, r.outcome, r.what_discussed]
+      .some(v => (v||'').toLowerCase().includes(q))
+  )
 
   return (
     <div className="space-y-6 max-w-full">
@@ -104,16 +157,26 @@ export default function CommunicationLog() {
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
-              className="input-base pl-8 py-1.5 w-52 text-xs"/>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search..."
+              className="input-base pl-8 py-1.5 w-52 text-xs"
+            />
           </div>
           <button onClick={exportCSV} className="btn-ghost text-xs py-1.5"><Download size={13}/>CSV</button>
-          {isAdmin && <button onClick={openAdd} className="btn-primary text-xs py-1.5"><Plus size={13}/>Add Entry</button>}
+          {isAdmin && (
+            <button onClick={openAdd} className="btn-primary text-xs py-1.5">
+              <Plus size={13}/>Add Entry
+            </button>
+          )}
         </div>
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-20"><div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"/></div>
+        <div className="flex justify-center py-20">
+          <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"/>
+        </div>
       ) : (
         <div className="glass-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -127,7 +190,11 @@ export default function CommunicationLog() {
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={10} className="table-td text-center text-slate-600 py-10">No entries yet</td></tr>
+                  <tr>
+                    <td colSpan={10} className="table-td text-center text-slate-600 py-10">
+                      No entries yet
+                    </td>
+                  </tr>
                 ) : filtered.map(row => (
                   <tr key={row.id} className="table-row">
                     <td className="table-td whitespace-nowrap">{row.date}</td>
@@ -142,8 +209,18 @@ export default function CommunicationLog() {
                     {isAdmin && (
                       <td className="table-td">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => openEdit(row)} className="p-1.5 hover:bg-white/8 rounded-lg text-slate-500 hover:text-slate-200 transition-colors"><Pencil size={13}/></button>
-                          <button onClick={() => handleDelete(row.id)} className="p-1.5 hover:bg-danger/10 rounded-lg text-slate-500 hover:text-danger transition-colors"><Trash2 size={13}/></button>
+                          <button
+                            onClick={() => openEdit(row)}
+                            className="p-1.5 hover:bg-white/8 rounded-lg text-slate-500 hover:text-slate-200 transition-colors"
+                          >
+                            <Pencil size={13}/>
+                          </button>
+                          <button
+                            onClick={() => handleDelete(row.id)}
+                            className="p-1.5 hover:bg-danger/10 rounded-lg text-slate-500 hover:text-danger transition-colors"
+                          >
+                            <Trash2 size={13}/>
+                          </button>
                         </div>
                       </td>
                     )}
@@ -156,18 +233,41 @@ export default function CommunicationLog() {
       )}
 
       <Modal title={editing ? 'Edit Log Entry' : 'Add Communication'} open={modalOpen} onClose={closeModal} wide>
+        {/* Error shown at TOP so it's always visible */}
+        {saveError && (
+          <div className="mb-4 bg-danger/10 border border-danger/20 text-danger text-sm px-4 py-3 rounded-lg font-medium">
+            {saveError}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormField label="Date" required>
-            <Input type="date" value={form.date || ''} onChange={e => setField('date', e.target.value)}/>
+            <Input
+              type="date"
+              value={form.date || ''}
+              onChange={e => setField('date', e.target.value)}
+            />
           </FormField>
           <FormField label="Time">
-            <Input type="time" value={form.time || ''} onChange={e => setField('time', e.target.value)}/>
+            <Input
+              type="time"
+              value={form.time || ''}
+              onChange={e => setField('time', e.target.value)}
+            />
           </FormField>
           <FormField label="Contact Name" required>
-            <Input value={form.contact_name || ''} onChange={e => setField('contact_name', e.target.value)} placeholder="Full name"/>
+            <Input
+              value={form.contact_name || ''}
+              onChange={e => setField('contact_name', e.target.value)}
+              placeholder="Full name"
+            />
           </FormField>
           <FormField label="Company">
-            <Input value={form.company || ''} onChange={e => setField('company', e.target.value)} placeholder="Company"/>
+            <Input
+              value={form.company || ''}
+              onChange={e => setField('company', e.target.value)}
+              placeholder="Company"
+            />
           </FormField>
           <FormField label="Type">
             <Select value={form.type} onChange={e => setField('type', e.target.value)}>
@@ -181,22 +281,30 @@ export default function CommunicationLog() {
           </FormField>
           <div className="sm:col-span-2">
             <FormField label="What Was Discussed">
-              <Textarea value={form.what_discussed || ''} onChange={e => setField('what_discussed', e.target.value)} placeholder="Summary of conversation..."/>
+              <Textarea
+                value={form.what_discussed || ''}
+                onChange={e => setField('what_discussed', e.target.value)}
+                placeholder="Summary of conversation..."
+              />
             </FormField>
           </div>
           <FormField label="Next Action">
-            <Input value={form.next_action || ''} onChange={e => setField('next_action', e.target.value)} placeholder="Follow-up action"/>
+            <Input
+              value={form.next_action || ''}
+              onChange={e => setField('next_action', e.target.value)}
+              placeholder="Follow-up action"
+            />
           </FormField>
           <FormField label="Next Action Date">
-            <Input type="date" value={form.next_action_date || ''} onChange={e => setField('next_action_date', e.target.value)}/>
+            <Input
+              type="date"
+              value={form.next_action_date || ''}
+              onChange={e => setField('next_action_date', e.target.value)}
+            />
           </FormField>
         </div>
-        {saveError && (
-          <div className="mt-4 bg-danger/10 border border-danger/20 text-danger text-sm px-4 py-2.5 rounded-lg">
-            {saveError}
-          </div>
-        )}
-        <div className="flex justify-end gap-3 mt-4">
+
+        <div className="flex justify-end gap-3 mt-6">
           <button onClick={closeModal} className="btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-60">
             {saving ? 'Saving...' : editing ? 'Save Changes' : 'Add Entry'}
