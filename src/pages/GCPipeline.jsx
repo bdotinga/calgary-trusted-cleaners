@@ -6,7 +6,7 @@ import Modal from '../components/Modal'
 import Badge from '../components/Badge'
 import { FormField, Input, Select, Textarea } from '../components/FormField'
 import { Plus, Pencil, Trash2, Download, Search } from 'lucide-react'
-import { format, parseISO, isValid, addDays, isWithinInterval } from 'date-fns'
+import { parseISO, isValid, addDays, isWithinInterval } from 'date-fns'
 
 const STATUS_OPTS = ['Prospecting','Contacted','Bid Submitted','Active','Won','Lost','On Hold']
 const REL_OPTS    = ['Cold','Warm','Hot']
@@ -14,6 +14,11 @@ const REL_OPTS    = ['Cold','Warm','Hot']
 const EMPTY = {
   tier: 1, company: '', address: '', phone: '', email: '', key_contact: '',
   status: 'Prospecting', relationship: 'Cold', active_tender: '', due_date: '', notes: ''
+}
+
+// Convert empty strings to null so PostgreSQL date/time columns don't reject them
+function clean(obj) {
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === '' ? null : v]))
 }
 
 function GCRow({ row, num, onEdit, onDelete, isAdmin }) {
@@ -81,7 +86,6 @@ export default function GCPipeline() {
 
   useEffect(() => { fetchRows() }, [fetchRows])
 
-  // Real-time
   useEffect(() => {
     const channel = supabase.channel('gc_pipeline_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gc_pipeline' }, fetchRows)
@@ -92,30 +96,32 @@ export default function GCPipeline() {
   function openAdd(tier) {
     setEditing(null)
     setForm({ ...EMPTY, tier })
+    setSaveError('')
     setModalOpen(true)
   }
 
   function openEdit(row) {
     setEditing(row)
     setForm({ ...row })
+    setSaveError('')
     setModalOpen(true)
   }
 
   function closeModal() { setModalOpen(false); setEditing(null); setSaveError('') }
-
   function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
   async function handleSave() {
-    if (!form.company.trim()) return
+    if (!form.company.trim()) { setSaveError('Company name is required.'); return }
     setSaving(true)
     setSaveError('')
 
     let error
     if (editing) {
-      ;({ error } = await supabase.from('gc_pipeline').update(form).eq('id', editing.id))
+      const { id, created_at, updated_at, ...rest } = form
+      ;({ error } = await supabase.from('gc_pipeline').update(clean(rest)).eq('id', editing.id))
     } else {
       const tier_rows = rows.filter(r => r.tier === form.tier)
-      ;({ error } = await supabase.from('gc_pipeline').insert({ ...form, sort_order: tier_rows.length + 1 }))
+      ;({ error } = await supabase.from('gc_pipeline').insert(clean({ ...form, sort_order: tier_rows.length + 1 })))
     }
 
     if (error) {
@@ -168,7 +174,7 @@ export default function GCPipeline() {
           <table className="w-full">
             <thead className="border-b border-white/8">
               <tr>
-                {['#','Company','Address','Phone','Email','Key Contact','Status','Relationship','Active Tender','Due Date', ...(isAdmin?['']:[])]
+                {['#','Company','Address','Phone','Email','Key Contact','Status','Relationship','Active Tender','Due Date']
                   .map(h => <th key={h} className="table-th">{h}</th>)}
                 {isAdmin && <th className="table-th w-16"></th>}
               </tr>
@@ -188,7 +194,6 @@ export default function GCPipeline() {
 
   return (
     <div className="space-y-8 max-w-full">
-      {/* Page header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">GC Pipeline</h1>
@@ -214,7 +219,6 @@ export default function GCPipeline() {
         </>
       )}
 
-      {/* Add/Edit Modal */}
       <Modal title={editing ? 'Edit GC Entry' : 'Add GC Entry'} open={modalOpen} onClose={closeModal} wide>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormField label="Tier" required>
@@ -252,7 +256,7 @@ export default function GCPipeline() {
             <Input value={form.active_tender} onChange={e => setField('active_tender', e.target.value)} placeholder="Project name" />
           </FormField>
           <FormField label="Due Date">
-            <Input type="date" value={form.due_date} onChange={e => setField('due_date', e.target.value)} />
+            <Input type="date" value={form.due_date || ''} onChange={e => setField('due_date', e.target.value)} />
           </FormField>
           <div className="sm:col-span-2">
             <FormField label="Notes">

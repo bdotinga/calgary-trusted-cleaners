@@ -15,6 +15,10 @@ const EMPTY = {
   est_value: '', scope: '', our_bid: '', status: 'Preparing', result: 'Pending', notes: ''
 }
 
+function clean(obj) {
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === '' ? null : v]))
+}
+
 export default function TenderTracker() {
   const { isAdmin } = useAuth()
   const [rows, setRows]           = useState([])
@@ -23,9 +27,10 @@ export default function TenderTracker() {
   const [editing, setEditing]     = useState(null)
   const [form, setForm]           = useState(EMPTY)
   const [saving, setSaving]       = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   const fetchRows = useCallback(async () => {
-    const { data } = await supabase.from('tenders').select('*').order('bid_due_date', { ascending: true })
+    const { data } = await supabase.from('tenders').select('*').order('bid_due_date', { ascending: true, nullsFirst: false })
     setRows(data || [])
     setLoading(false)
   }, [])
@@ -39,24 +44,31 @@ export default function TenderTracker() {
     return () => supabase.removeChannel(ch)
   }, [fetchRows])
 
-  function openAdd() { setEditing(null); setForm(EMPTY); setModalOpen(true) }
-  function openEdit(row) { setEditing(row); setForm({ ...row }); setModalOpen(true) }
-  function closeModal() { setModalOpen(false); setEditing(null) }
+  function openAdd() { setEditing(null); setForm(EMPTY); setSaveError(''); setModalOpen(true) }
+  function openEdit(row) { setEditing(row); setForm({ ...row }); setSaveError(''); setModalOpen(true) }
+  function closeModal() { setModalOpen(false); setEditing(null); setSaveError('') }
   function setField(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
   async function handleSave() {
-    if (!form.project_name.trim()) return
+    if (!form.project_name.trim()) { setSaveError('Project name is required.'); return }
     setSaving(true)
-    const payload = {
+    setSaveError('')
+
+    const payload = clean({
       ...form,
       est_value: parseFloat(form.est_value) || 0,
-      our_bid: parseFloat(form.our_bid) || 0,
-    }
+      our_bid:   parseFloat(form.our_bid)   || 0,
+    })
+
+    let error
     if (editing) {
-      await supabase.from('tenders').update(payload).eq('id', editing.id)
+      const { id, created_at, updated_at, ...rest } = payload
+      ;({ error } = await supabase.from('tenders').update(rest).eq('id', editing.id))
     } else {
-      await supabase.from('tenders').insert(payload)
+      ;({ error } = await supabase.from('tenders').insert(payload))
     }
+
+    if (error) { setSaveError(error.message); setSaving(false); return }
     await fetchRows(); setSaving(false); closeModal()
   }
 
@@ -75,9 +87,9 @@ export default function TenderTracker() {
     a.download = 'tenders.csv'; a.click()
   }
 
-  const fmtCur = v => v ? `$${Number(v).toLocaleString('en-CA')}` : '—'
+  const fmtCur = v => (v != null && v !== '') ? `$${Number(v).toLocaleString('en-CA')}` : '—'
   const totalEst = rows.reduce((s, r) => s + (parseFloat(r.est_value) || 0), 0)
-  const totalBid = rows.reduce((s, r) => s + (parseFloat(r.our_bid) || 0), 0)
+  const totalBid = rows.reduce((s, r) => s + (parseFloat(r.our_bid)   || 0), 0)
 
   const now = new Date(); const in7 = addDays(now, 7)
   function dueSoon(dateStr) {
@@ -131,7 +143,7 @@ export default function TenderTracker() {
             <table className="w-full">
               <thead className="border-b border-white/8">
                 <tr>
-                  {['#','Project / Tender','General Contractor','Bid Due','Bid Time','Est. Value','Our Bid','Scope','Status','Result','Notes',...(isAdmin?['']:[])]
+                  {['#','Project / Tender','General Contractor','Bid Due','Bid Time','Est. Value','Our Bid','Scope','Status','Result','Notes']
                     .map(h => <th key={h} className="table-th">{h}</th>)}
                   {isAdmin && <th className="table-th w-16"></th>}
                 </tr>
@@ -186,13 +198,25 @@ export default function TenderTracker() {
       <Modal title={editing ? 'Edit Tender' : 'Add Tender'} open={modalOpen} onClose={closeModal} wide>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
-            <FormField label="Project / Tender Name" required><Input value={form.project_name} onChange={e => setField('project_name', e.target.value)} placeholder="Project name"/></FormField>
+            <FormField label="Project / Tender Name" required>
+              <Input value={form.project_name} onChange={e => setField('project_name', e.target.value)} placeholder="Project name"/>
+            </FormField>
           </div>
-          <FormField label="General Contractor"><Input value={form.general_contractor} onChange={e => setField('general_contractor', e.target.value)} placeholder="GC name"/></FormField>
-          <FormField label="Bid Due Date"><Input type="date" value={form.bid_due_date} onChange={e => setField('bid_due_date', e.target.value)}/></FormField>
-          <FormField label="Bid Time"><Input type="time" value={form.bid_time} onChange={e => setField('bid_time', e.target.value)}/></FormField>
-          <FormField label="Est. Value ($)"><Input type="number" min="0" step="100" value={form.est_value} onChange={e => setField('est_value', e.target.value)} placeholder="0.00"/></FormField>
-          <FormField label="Our Bid ($)"><Input type="number" min="0" step="100" value={form.our_bid} onChange={e => setField('our_bid', e.target.value)} placeholder="0.00"/></FormField>
+          <FormField label="General Contractor">
+            <Input value={form.general_contractor || ''} onChange={e => setField('general_contractor', e.target.value)} placeholder="GC name"/>
+          </FormField>
+          <FormField label="Bid Due Date">
+            <Input type="date" value={form.bid_due_date || ''} onChange={e => setField('bid_due_date', e.target.value)}/>
+          </FormField>
+          <FormField label="Bid Time">
+            <Input type="time" value={form.bid_time || ''} onChange={e => setField('bid_time', e.target.value)}/>
+          </FormField>
+          <FormField label="Est. Value ($)">
+            <Input type="number" min="0" step="100" value={form.est_value || ''} onChange={e => setField('est_value', e.target.value)} placeholder="0.00"/>
+          </FormField>
+          <FormField label="Our Bid ($)">
+            <Input type="number" min="0" step="100" value={form.our_bid || ''} onChange={e => setField('our_bid', e.target.value)} placeholder="0.00"/>
+          </FormField>
           <FormField label="Status">
             <Select value={form.status} onChange={e => setField('status', e.target.value)}>
               {STATUS_OPTS.map(o => <option key={o}>{o}</option>)}
@@ -204,13 +228,22 @@ export default function TenderTracker() {
             </Select>
           </FormField>
           <div className="sm:col-span-2">
-            <FormField label="Scope of Work"><Textarea value={form.scope} onChange={e => setField('scope', e.target.value)} placeholder="Describe the scope…"/></FormField>
+            <FormField label="Scope of Work">
+              <Textarea value={form.scope || ''} onChange={e => setField('scope', e.target.value)} placeholder="Describe the scope…"/>
+            </FormField>
           </div>
           <div className="sm:col-span-2">
-            <FormField label="Notes"><Textarea value={form.notes} onChange={e => setField('notes', e.target.value)} placeholder="Additional notes…"/></FormField>
+            <FormField label="Notes">
+              <Textarea value={form.notes || ''} onChange={e => setField('notes', e.target.value)} placeholder="Additional notes…"/>
+            </FormField>
           </div>
         </div>
-        <div className="flex justify-end gap-3 mt-6">
+        {saveError && (
+          <div className="mt-4 bg-danger/10 border border-danger/20 text-danger text-sm px-4 py-2.5 rounded-lg">
+            {saveError}
+          </div>
+        )}
+        <div className="flex justify-end gap-3 mt-4">
           <button onClick={closeModal} className="btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-60">
             {saving ? 'Saving…' : editing ? 'Save Changes' : 'Add Tender'}
