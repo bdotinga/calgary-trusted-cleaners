@@ -16,25 +16,35 @@ export default function Modal({ title, open, onClose, children, wide }) {
 
   if (!open) return null
 
+  // Outer div: plain block (NOT flex) + overflow-y:auto → reliable scroll in all browsers
+  // Inner div: flex centering + min-height:100% → backdrop fills viewport even for short modals
+  // Modal panel: stopPropagation so clicks inside don't bubble to the close handler
   return createPortal(
     <div
+      onClick={onClose}
       style={{
         position: 'fixed',
-        top: 0, left: 0, right: 0, bottom: 0,
+        inset: 0,
         zIndex: 50,
         overflowY: 'auto',
         WebkitOverflowScrolling: 'touch',
         backgroundColor: 'rgba(0,0,0,0.72)',
         backdropFilter: 'blur(4px)',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div style={{ padding: '2rem 1rem', width: '100%', display: 'flex', justifyContent: 'center' }}>
+      <div
+        style={{
+          minHeight: '100%',
+          padding: '2rem 1rem',
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          boxSizing: 'border-box',
+        }}
+      >
         <div
-          style={{ maxWidth: wide ? '768px' : '560px', width: '100%', flexShrink: 0 }}
+          onClick={(e) => e.stopPropagation()}
+          style={{ maxWidth: wide ? '768px' : '560px', width: '100%' }}
           className="bg-navy-800 border border-white/10 rounded-2xl shadow-2xl"
         >
           {/* Header */}
