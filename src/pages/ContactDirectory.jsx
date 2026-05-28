@@ -29,7 +29,7 @@ export default function ContactDirectory() {
   const [search, setSearch]       = useState('')
 
   const fetchRows = useCallback(async () => {
-    const { data } = await supabase.from('contacts').select('*').order('name')
+    const { data } = await supabase.from('contacts').select('*').order('sort_order', { ascending: true })
     setRows(data || [])
     setLoading(false)
   }, [])
